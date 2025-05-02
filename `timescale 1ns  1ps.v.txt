@@ -1,0 +1,268 @@
+`timescale 1ns / 1ps
+
+module mano_computer_system(
+    input wire clk,
+    input wire reset,
+    output wire [15:0] AC_debug,
+    output wire [2:0] state_debug,
+    output wire [15:0] PC_debug
+);
+
+    wire [15:0] mem_data_in;
+    wire [15:0] mem_data_out;
+    wire [15:0] mem_address;
+    wire mem_read;
+    wire mem_write;
+
+    
+    mano_processor processor (
+        .clk(clk),
+        .reset(reset),
+        .mem_data_in(mem_data_in),
+        .mem_data_out(mem_data_out),
+        .mem_address(mem_address),
+        .mem_read(mem_read),
+        .mem_write(mem_write),
+        .AC_out(AC_debug),
+        .state_out(state_debug),
+        .PC_out(PC_debug)
+    );
+    
+    
+    memory mem (
+        .clk(clk),
+        .address(mem_address),
+        .data_in(mem_data_out),
+        .read_en(mem_read),
+        .write_en(mem_write),
+        .data_out(mem_data_in)
+    );
+
+endmodule
+
+module mano_processor(
+    input wire clk,
+    input wire reset,
+    input wire [15:0] mem_data_in,
+    output reg [15:0] mem_data_out,
+    output reg [15:0] mem_address,
+    output reg mem_read,
+    output reg mem_write,
+    output reg [15:0] AC_out,
+    output reg [2:0] state_out,
+    output reg [15:0] PC_out
+);
+
+   
+    reg [15:0] AC;  
+    reg [15:0] DR;  
+    reg [15:0] AR;  
+    reg [15:0] PC;  
+    reg [15:0] IR;  
+    
+    
+    reg [2:0] state;
+    reg [15:0] alu_out;
+    reg carry_flag;
+    
+    
+    parameter CLA = 3'b000;
+    parameter ADD = 3'b001;
+    parameter AND = 3'b010;
+    parameter CIR = 3'b011;
+    parameter CIL = 3'b100;
+    
+ 
+    parameter FETCH = 3'b000;
+    parameter DECODE = 3'b001;
+    parameter EXECUTE = 3'b010;
+    parameter MEM_READ = 3'b011;
+    parameter MEM_WRITE = 3'b100;
+    
+    
+    always @(*) begin
+        AC_out = AC;
+        state_out = state;
+        PC_out = PC;
+    end
+    
+    always @(posedge clk or posedge reset) begin
+        if (reset) begin
+            
+            AC <= 16'b0;
+            DR <= 16'b0;
+            AR <= 16'b0;
+            PC <= 16'b0;
+            IR <= 16'b0;
+            state <= FETCH;
+            carry_flag <= 1'b0;
+            mem_read <= 1'b0;
+            mem_write <= 1'b0;
+            mem_data_out <= 16'b0;
+            mem_address <= 16'b0;
+        end else begin
+            case (state)
+                FETCH: begin
+                   
+                    AR <= PC;
+                    mem_address <= PC;
+                    mem_read <= 1'b1;
+                    mem_write <= 1'b0;
+                    state <= MEM_READ;
+                end
+                
+                MEM_READ: begin
+                    
+                    if (mem_read) begin
+                        if (state == FETCH) IR <= mem_data_in;
+                        else DR <= mem_data_in;
+                        mem_read <= 1'b0;
+                    end
+                    
+                    if (state == FETCH) begin
+                        PC <= PC + 1;
+                        state <= DECODE;
+                    end else begin
+                        state <= EXECUTE;
+                    end
+                end
+                
+                DECODE: begin
+                    case (IR[15:13])  
+                        CLA: state <= EXECUTE;
+                        ADD, AND: begin
+                            AR <= IR[12:0]; 
+                            mem_address <= IR[12:0];
+                            mem_read <= 1'b1;
+                            state <= MEM_READ;
+                        end
+                        CIR, CIL: state <= EXECUTE;
+                        default: state <= FETCH;
+                    endcase
+                end
+                
+                EXECUTE: begin
+                    case (IR[15:13])
+                        CLA: begin
+                            AC <= 16'b0;
+                            state <= FETCH;
+                        end
+                        
+                        ADD: begin
+                            {carry_flag, AC} <= AC + DR;
+                            state <= FETCH;
+                        end
+                        
+                        AND: begin
+                            AC <= AC & DR;
+                            state <= FETCH;
+                        end
+                        
+                        CIR: begin
+                            AC <= {AC[0], AC[15:1]};
+                            state <= FETCH;
+                        end
+                        
+                        CIL: begin
+                            AC <= {AC[14:0], AC[15]};
+                            state <= FETCH;
+                        end
+                    endcase
+                end
+            endcase
+        end
+    end
+
+endmodule
+
+module memory(
+    input wire clk,
+    input wire [15:0] address,
+    input wire [15:0] data_in,
+    input wire read_en,
+    input wire write_en,
+    output reg [15:0] data_out
+);
+
+    
+    reg [15:0] mem [0:65535];
+    
+    
+        
+        mem[0] = {3'b000, 13'b0};       
+        mem[1] = {3'b001, 13'd1};        
+        mem[2] = {3'b010, 13'd2};       
+        mem[3] = {3'b011, 13'b0};       
+        mem[4] = {3'b100, 13'b0};       
+        mem[5] = {3'b000, 13'b0};       
+        
+        
+        mem[1] = 16'h00AA;  
+        mem[2] = 16'h00FF;  
+    end
+    
+    always @(posedge clk) begin
+        if (read_en) begin
+            data_out <= mem[address];
+        end
+        if (write_en) begin
+            mem[address] <= data_in;
+        end
+    end
+
+endmodule
+
+module tb_mano_computer();
+
+    
+    reg clk;
+    reg reset;
+    
+    
+    wire [15:0] AC_val;
+    wire [2:0] state_val;
+    wire [15:0] PC_val;
+    
+    
+    mano_computer_system uut (
+        .clk(clk),
+        .reset(reset),
+        .AC_debug(AC_val),
+        .state_debug(state_val),
+        .PC_debug(PC_val)
+    );
+    
+    
+    initial begin
+        clk = 0;
+        forever #10 clk = ~clk;
+    end
+    
+    
+        reset = 1;
+        
+ 
+        #20;
+        
+        reset = 0;
+        
+        
+        wait (PC_val == 16'd5);
+        #100;
+        
+        
+        $display("\nSimulation Results:");
+        $display("Final AC value: %h", AC_val);
+        $display("Final PC value: %h", PC_val);
+        $display("Final state: %d", state_val);
+        
+        $finish;
+    end
+    
+  
+    initial begin
+        $monitor("Time = %t ns | State = %d | PC = %h | AC = %h", 
+                 $time, state_val, PC_val, AC_val);
+    end
+
+endmodule
